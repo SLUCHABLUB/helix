@@ -111,7 +111,7 @@ impl JumpList {
                 *selection = selection
                     .clone()
                     .map(transaction.changes())
-                    .ensure_invariants(text);
+                    .ensure_invariants(text, doc.config.load().logical_cursor_shape);
             }
         }
     }
@@ -239,6 +239,7 @@ impl View {
         let vertical_viewport_end = view_offset.vertical_offset + viewport.height as usize;
         let text_fmt = doc.text_format(viewport.width, None);
         let annotations = self.text_annotations(doc, None);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
         let (scrolloff_top, scrolloff_bottom) = if CENTERING {
             (0, 0)
@@ -259,7 +260,10 @@ impl View {
             )
         };
 
-        let cursor = doc.selection(self.id).primary().cursor(doc_text);
+        let cursor = doc
+            .selection(self.id)
+            .primary()
+            .cursor(doc_text, logical_cursor_shape);
         let mut offset = view_offset;
         let off = visual_offset_from_anchor(
             doc_text,
@@ -500,7 +504,7 @@ impl View {
             let cursor = doc
                 .selection(self.id)
                 .primary()
-                .cursor(doc.text().slice(..));
+                .cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
             text_annotations.add_line_annotation(InlineDiagnostics::new(
                 doc,
                 cursor,

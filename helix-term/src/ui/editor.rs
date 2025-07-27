@@ -15,7 +15,7 @@ use crate::{
 
 use helix_core::{
     diagnostic::NumberOrString,
-    graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
+    graphemes::next_grapheme_boundary,
     movement::Direction,
     syntax::{self, OverlayHighlights},
     text_annotations::TextAnnotations,
@@ -32,7 +32,7 @@ use helix_view::{
     Document, Editor, Theme, View,
 };
 use std::{mem::take, num::NonZeroUsize, ops, path::PathBuf, rc::Rc};
-
+use arc_swap::access::DynAccess;
 use tui::{buffer::Buffer as Surface, text::Span};
 
 pub struct EditorView {
@@ -164,7 +164,7 @@ impl EditorView {
         let primary_cursor = doc
             .selection(view.id)
             .primary()
-            .cursor(doc.text().slice(..));
+            .cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
         if is_focused {
             decorations.add_decoration(text_decorations::Cursor {
                 cache: &editor.cursor_cache,
@@ -436,6 +436,7 @@ impl EditorView {
         is_terminal_focused: bool,
     ) -> OverlayHighlights {
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let selection = doc.selection(view.id);
         let primary_idx = selection.primary_index();
 
@@ -492,10 +493,10 @@ impl EditorView {
                 continue;
             }
 
-            let range = range.min_width_1(text);
             if range.head > range.anchor {
                 // Standard case.
-                let cursor_start = prev_grapheme_boundary(text, range.head);
+                let cursor_start = range.cursor(text, logical_cursor_shape);
+                let cursor_end = next_grapheme_boundary(text, cursor_start);
                 // non block cursors look like they exclude the cursor
                 let selection_end =
                     if selection_is_primary && !cursor_is_block && mode != Mode::Insert {
@@ -507,7 +508,7 @@ impl EditorView {
                 // add block cursors
                 // skip primary cursor if terminal is unfocused - crossterm cursor is used in that case
                 if !selection_is_primary || (cursor_is_block && is_terminal_focused) {
-                    spans.push((cursor_scope, cursor_start..range.head));
+                    spans.push((cursor_scope, cursor_start..cursor_end));
                 }
             } else {
                 // Reverse case.
@@ -543,7 +544,11 @@ impl EditorView {
         let syntax = doc.syntax()?;
         let highlight = theme.find_highlight_exact("ui.cursor.match")?;
         let text = doc.text().slice(..);
-        let pos = doc.selection(view.id).primary().cursor(text);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+        let pos = doc
+            .selection(view.id)
+            .primary()
+            .cursor(text, logical_cursor_shape);
         let pos = helix_core::match_brackets::find_matching_bracket(syntax, text, pos)?;
         Some(OverlayHighlights::single(highlight, pos..pos + 1))
     }
@@ -621,10 +626,11 @@ impl EditorView {
         decoration_manager: &mut DecorationManager<'d>,
     ) {
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let cursors: Rc<[_]> = doc
             .selection(view.id)
             .iter()
-            .map(|range| range.cursor_line(text))
+            .map(|range| range.cursor_line(text, logical_cursor_shape))
             .collect();
 
         let mut offset = 0;
@@ -693,7 +699,7 @@ impl EditorView {
         let cursor = doc
             .selection(view.id)
             .primary()
-            .cursor(doc.text().slice(..));
+            .cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
 
         let diagnostics = doc.diagnostics().iter().filter(|diagnostic| {
             diagnostic.range.start <= cursor && diagnostic.range.end >= cursor
@@ -742,8 +748,12 @@ impl EditorView {
     /// Apply the highlighting on the lines where a cursor is active
     pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         // TODO only highlight the visual line that contains the cursor instead of the full visual line
-        let primary_line = doc.selection(view.id).primary().cursor_line(text);
+        let primary_line = doc
+            .selection(view.id)
+            .primary()
+            .cursor_line(text, logical_cursor_shape);
 
         // The secondary_lines do contain the primary_line, it doesn't matter
         // as the else-if clause in the loop later won't test for the
@@ -754,7 +764,7 @@ impl EditorView {
         let secondary_lines: Vec<_> = doc
             .selection(view.id)
             .iter()
-            .map(|range| range.cursor_line(text))
+            .map(|range| range.cursor_line(text, logical_cursor_shape))
             .collect();
 
         let primary_style = theme.get("ui.cursorline.primary");
@@ -781,6 +791,7 @@ impl EditorView {
         text_annotations: &TextAnnotations,
     ) {
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
         // Manual fallback behaviour:
         // ui.cursorcolumn.{p/s} -> ui.cursorcolumn -> ui.cursorline.{p/s}
@@ -801,7 +812,7 @@ impl EditorView {
         let text_format = doc.text_format(viewport.width, None);
         for range in selection.iter() {
             let is_primary = primary == *range;
-            let cursor = range.cursor(text);
+            let cursor = range.cursor(text, logical_cursor_shape);
 
             let Position { col, .. } =
                 visual_offset_from_block(text, cursor, cursor, &text_format, text_annotations).0;
@@ -947,7 +958,11 @@ impl EditorView {
                                 }
 
                                 let text = doc.text().slice(..);
-                                let cursor = doc.selection(view.id).primary().cursor(text);
+                                let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+                                let cursor = doc
+                                    .selection(view.id)
+                                    .primary()
+                                    .cursor(text, logical_cursor_shape);
 
                                 let shift_position = |pos: usize| -> usize {
                                     (pos + cursor).saturating_sub(trigger_offset)
@@ -1138,6 +1153,7 @@ impl EditorView {
                             doc.text().slice(..),
                             pos,
                             true,
+                            doc.config.load().logical_cursor_shape,
                         );
                         editor.mouse_down_range = Some(primary);
                         doc.set_selection(view_id, Selection::single(primary.anchor, primary.head));
@@ -1187,7 +1203,12 @@ impl EditorView {
 
                 let mut selection = doc.selection(view.id).clone();
                 let primary = selection.primary_mut();
-                *primary = primary.put_cursor(doc.text().slice(..), pos, true);
+                *primary = primary.put_cursor(
+                    doc.text().slice(..),
+                    pos,
+                    true,
+                    doc.config.load().logical_cursor_shape,
+                );
                 doc.set_selection(view.id, selection);
                 let view_id = view.id;
                 cxt.editor.ensure_cursor_in_view(view_id);

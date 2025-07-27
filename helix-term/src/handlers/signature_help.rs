@@ -317,7 +317,11 @@ fn signature_help_post_insert_char_hook(
     } = capabilities
     {
         let mut text = doc.text().slice(..);
-        let cursor = doc.selection(view.id).primary().cursor(text);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+        let cursor = doc
+            .selection(view.id)
+            .primary()
+            .cursor(text, logical_cursor_shape);
         text = text.slice(..cursor);
         if triggers.iter().any(|trigger| text.ends_with(trigger)) {
             send_blocking(tx, SignatureHelpEvent::Trigger)

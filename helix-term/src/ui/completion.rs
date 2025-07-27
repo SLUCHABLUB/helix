@@ -296,7 +296,11 @@ impl Completion {
 
         let (view, doc) = current_ref!(editor);
         let text = doc.text().slice(..);
-        let cursor = doc.selection(view.id).primary().cursor(text);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+        let cursor = doc
+            .selection(view.id)
+            .primary()
+            .cursor(text, logical_cursor_shape);
         let offset = text
             .chars_at(cursor)
             .reversed()
@@ -589,7 +593,8 @@ fn lsp_item_to_transaction(
 ) -> (Transaction, Option<RenderedSnippet>) {
     let selection = doc.selection(view_id);
     let text = doc.text().slice(..);
-    let primary_cursor = selection.primary().cursor(text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let primary_cursor = selection.primary().cursor(text, logical_cursor_shape);
 
     let (edit_offset, new_text) = if let Some(edit) = &item.text_edit {
         let edit = match edit {
@@ -642,6 +647,7 @@ fn lsp_item_to_transaction(
             replace_mode,
             snippet,
             &mut doc.snippet_ctx(),
+            doc.config.load().logical_cursor_shape,
         );
         (transaction, Some(snippet))
     } else {
@@ -651,6 +657,7 @@ fn lsp_item_to_transaction(
             edit_offset,
             replace_mode,
             new_text,
+            doc.config.load().logical_cursor_shape,
         );
         (transaction, None)
     }

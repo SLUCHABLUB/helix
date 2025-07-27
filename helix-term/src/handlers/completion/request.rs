@@ -177,7 +177,11 @@ fn request_completions(
     }
 
     let text = doc.text();
-    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(text.slice(..), logical_cursor_shape);
     if trigger.view != view.id || trigger.doc != doc.id() || cursor < trigger.pos {
         return;
     }
@@ -300,7 +304,11 @@ fn request_completions_from_language_server(
     let provider = ls.id();
     let offset_encoding = ls.offset_encoding();
     let text = doc.text();
-    let cursor = doc.selection(view).primary().cursor(text.slice(..));
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = doc
+        .selection(view)
+        .primary()
+        .cursor(text.slice(..), logical_cursor_shape);
     let pos = pos_to_lsp_pos(text, cursor, offset_encoding);
     let doc_id = doc.identifier();
 

@@ -122,7 +122,11 @@ pub fn trigger_auto_completion(editor: &Editor, trigger_char_only: bool) {
     }
     let (view, doc): (&helix_view::View, &helix_view::Document) = current_ref!(editor);
     let mut text = doc.text().slice(..);
-    let cursor = doc.selection(view.id).primary().cursor(text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(text, logical_cursor_shape);
     text = doc.text().slice(..cursor);
 
     let is_trigger_char = doc
@@ -223,7 +227,7 @@ fn completion_post_command_hook(
                     let primary_cursor = doc
                         .selection(view.id)
                         .primary()
-                        .cursor(doc.text().slice(..));
+                        .cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
                     CompletionEvent::DeleteText {
                         cursor: primary_cursor,
                     }

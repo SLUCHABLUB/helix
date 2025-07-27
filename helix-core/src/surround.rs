@@ -7,7 +7,7 @@ use crate::{
         is_open_bracket,
     },
     movement::Direction,
-    search, Range, Selection, Syntax,
+    search, LogicalCursorShape, Range, Selection, Syntax,
 };
 use ropey::RopeSlice;
 
@@ -162,6 +162,7 @@ pub fn find_nth_pairs_pos(
     ch: char,
     range: Range,
     n: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Result<(usize, usize)> {
     if text.len_chars() < 2 {
         return Err(Error::PairNotFound);
@@ -171,7 +172,7 @@ pub fn find_nth_pairs_pos(
     }
 
     let (open, close) = get_pair(ch);
-    let pos = range.cursor(text);
+    let pos = range.cursor(text, logical_cursor_shape);
 
     let (open, close) = if open == close {
         if Some(open) == text.get_char(pos) {
@@ -292,13 +293,14 @@ pub fn get_surround_pos(
     selection: &Selection,
     ch: Option<char>,
     skip: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Result<Vec<usize>> {
     let mut change_pos = Vec::new();
 
     for &range in selection {
         let (open_pos, close_pos) = {
             let range_raw = match ch {
-                Some(ch) => find_nth_pairs_pos(text, ch, range, skip)?,
+                Some(ch) => find_nth_pairs_pos(text, ch, range, skip, logical_cursor_shape)?,
                 None => find_nth_closest_pairs_pos(syntax, text, range, skip)?,
             };
             let range = Range::new(range_raw.0, range_raw.1);
@@ -331,7 +333,15 @@ mod test {
             );
 
         assert_eq!(
-            get_surround_pos(None, doc.slice(..), &selection, Some('('), 1).unwrap(),
+            get_surround_pos(
+                None,
+                doc.slice(..),
+                &selection,
+                Some('('),
+                1,
+                LogicalCursorShape::Block
+            )
+            .unwrap(),
             expectations
         );
     }
@@ -346,7 +356,14 @@ mod test {
             );
 
         assert_eq!(
-            get_surround_pos(None, doc.slice(..), &selection, Some('('), 1),
+            get_surround_pos(
+                None,
+                doc.slice(..),
+                &selection,
+                Some('('),
+                1,
+                LogicalCursorShape::Block
+            ),
             Err(Error::PairNotFound)
         );
     }
@@ -361,7 +378,14 @@ mod test {
             );
 
         assert_eq!(
-            get_surround_pos(None, doc.slice(..), &selection, Some('('), 1),
+            get_surround_pos(
+                None,
+                doc.slice(..),
+                &selection,
+                Some('('),
+                1,
+                LogicalCursorShape::Block
+            ),
             Err(Error::PairNotFound) // overlapping surround chars
         );
     }
@@ -376,7 +400,14 @@ mod test {
             );
 
         assert_eq!(
-            get_surround_pos(None, doc.slice(..), &selection, Some('['), 1),
+            get_surround_pos(
+                None,
+                doc.slice(..),
+                &selection,
+                Some('['),
+                1,
+                LogicalCursorShape::Block
+            ),
             Err(Error::CursorOverlap)
         );
     }
@@ -392,8 +423,14 @@ mod test {
 
         assert_eq!(2, expectations.len());
         assert_eq!(
-            find_nth_pairs_pos(doc.slice(..), '\'', selection.primary(), 1)
-                .expect("find should succeed"),
+            find_nth_pairs_pos(
+                doc.slice(..),
+                '\'',
+                selection.primary(),
+                1,
+                LogicalCursorShape::Block
+            )
+            .expect("find should succeed"),
             (expectations[0], expectations[1])
         )
     }
@@ -409,8 +446,14 @@ mod test {
 
         assert_eq!(2, expectations.len());
         assert_eq!(
-            find_nth_pairs_pos(doc.slice(..), '\'', selection.primary(), 2)
-                .expect("find should succeed"),
+            find_nth_pairs_pos(
+                doc.slice(..),
+                '\'',
+                selection.primary(),
+                2,
+                LogicalCursorShape::Block
+            )
+            .expect("find should succeed"),
             (expectations[0], expectations[1])
         )
     }
@@ -425,7 +468,13 @@ mod test {
             );
 
         assert_eq!(
-            find_nth_pairs_pos(doc.slice(..), '\'', selection.primary(), 1),
+            find_nth_pairs_pos(
+                doc.slice(..),
+                '\'',
+                selection.primary(),
+                1,
+                LogicalCursorShape::Block
+            ),
             Err(Error::CursorOnAmbiguousPair)
         )
     }

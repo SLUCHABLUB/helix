@@ -10,7 +10,7 @@ use crate::{
     line_ending::get_line_ending,
     movement::Direction,
     tree_sitter::Node,
-    Assoc, ChangeSet, RopeSlice,
+    Assoc, ChangeSet, LogicalCursorShape, RopeSlice,
 };
 use helix_stdx::range::is_subset;
 use helix_stdx::rope::{self, RopeSliceExt};
@@ -46,7 +46,8 @@ use std::{borrow::Cow, iter, slice};
 /// However, a zero-width range will overlap with the shared
 /// left-edge of another range.
 ///
-/// By convention, user-facing ranges are considered to have
+/// If `editor.logical-cursor-shape` is set to `"block"`,
+/// user-facing ranges are considered to have
 /// a block cursor on the head-side of the range that spans a
 /// single grapheme inward from the range's edge.  There are a
 /// variety of helper methods on `Range` for working in terms of
@@ -327,31 +328,40 @@ impl Range {
     }
 
     //--------------------------------
-    // Block-cursor methods.
+    // Cursor methods.
 
-    /// Gets the left-side position of the block cursor.
+    /// Gets the left-side position of the cursor.
     #[must_use]
     #[inline]
-    pub fn cursor(self, text: RopeSlice) -> usize {
-        if self.head > self.anchor {
+    pub fn cursor(self, text: RopeSlice, logical_cursor_shape: LogicalCursorShape) -> usize {
+        if logical_cursor_shape == LogicalCursorShape::Block && self.head > self.anchor {
             prev_grapheme_boundary(text, self.head)
         } else {
             self.head
         }
     }
 
-    /// Puts the left side of the block cursor at `char_idx`, optionally extending.
+    /// Puts the left side of the cursor at `char_idx`, optionally extending.
     ///
-    /// This follows "1-width" semantics, and therefore does a combination of anchor
-    /// and head moves to behave as if both the front and back of the range are 1-width
-    /// blocks
+    /// This follows the same semantics as the cursor, and therefore may do a combination of anchor
+    /// and head moves to behave as if both the front and back of the range are 1-width blocks.
     ///
     /// This method assumes that the range and `char_idx` are already properly
     /// grapheme-aligned.
     #[must_use]
     #[inline]
-    pub fn put_cursor(self, text: RopeSlice, char_idx: usize, extend: bool) -> Range {
+    pub fn put_cursor(
+        self,
+        text: RopeSlice,
+        char_idx: usize,
+        extend: bool,
+        logical_cursor_shape: LogicalCursorShape,
+    ) -> Range {
         if extend {
+            if logical_cursor_shape == LogicalCursorShape::Bar {
+                return Range::new(self.anchor, char_idx);
+            }
+
             let anchor = if self.head >= self.anchor && char_idx < self.anchor {
                 next_grapheme_boundary(text, self.anchor)
             } else if self.head < self.anchor && char_idx >= self.anchor {
@@ -370,11 +380,11 @@ impl Range {
         }
     }
 
-    /// The line number that the block-cursor is on.
+    /// The line number that the cursor is on.
     #[inline]
     #[must_use]
-    pub fn cursor_line(&self, text: RopeSlice) -> usize {
-        text.char_to_line(self.cursor(text))
+    pub fn cursor_line(&self, text: RopeSlice, logical_cursor_shape: LogicalCursorShape) -> usize {
+        text.char_to_line(self.cursor(text, logical_cursor_shape))
     }
 
     /// Returns true if this Range covers a single grapheme in the given text
@@ -653,21 +663,31 @@ impl Selection {
         self.normalize()
     }
 
-    // Ensures the selection adheres to the following invariants:
-    // 1. All ranges are grapheme aligned.
-    // 2. All ranges are at least 1 character wide, unless at the
-    //    very end of the document.
-    // 3. Ranges are non-overlapping.
-    // 4. Ranges are sorted by their position in the text.
-    pub fn ensure_invariants(self, text: RopeSlice) -> Self {
-        self.transform(|r| r.min_width_1(text).grapheme_aligned(text))
-            .normalize()
+    /// Ensures the selection adheres to the following invariants:
+    /// 1. All ranges are grapheme aligned.
+    /// 2. All ranges are at least 1 character wide, unless at the
+    ///    very end of the document or if the logical cursor shape is a bar.
+    /// 3. Ranges are non-overlapping.
+    /// 4. Ranges are sorted by their position in the text.
+    pub fn ensure_invariants(
+        self,
+        text: RopeSlice,
+        logical_cursor_shape: LogicalCursorShape,
+    ) -> Self {
+        self.transform(|r| {
+            match logical_cursor_shape {
+                LogicalCursorShape::Bar => r,
+                LogicalCursorShape::Block => r.min_width_1(text),
+            }
+            .grapheme_aligned(text)
+        })
+        .normalize()
     }
 
     /// Transforms the selection into all of the left-side head positions,
     /// using block-cursor semantics.
-    pub fn cursors(self, text: RopeSlice) -> Self {
-        self.transform(|range| Range::point(range.cursor(text)))
+    pub fn cursors(self, text: RopeSlice, logical_cursor_shape: LogicalCursorShape) -> Self {
+        self.transform(|range| Range::point(range.cursor(text, logical_cursor_shape)))
     }
 
     pub fn fragments<'a>(
@@ -1232,19 +1252,19 @@ mod test {
         let s = r.slice(..);
 
         // Zero-width ranges.
-        assert_eq!(Range::new(0, 0).cursor(s), 0);
-        assert_eq!(Range::new(2, 2).cursor(s), 2);
-        assert_eq!(Range::new(3, 3).cursor(s), 3);
+        assert_eq!(Range::new(0, 0).cursor(s, LogicalCursorShape::Block), 0);
+        assert_eq!(Range::new(2, 2).cursor(s, LogicalCursorShape::Block), 2);
+        assert_eq!(Range::new(3, 3).cursor(s, LogicalCursorShape::Block), 3);
 
         // Forward ranges.
-        assert_eq!(Range::new(0, 2).cursor(s), 0);
-        assert_eq!(Range::new(0, 3).cursor(s), 2);
-        assert_eq!(Range::new(3, 6).cursor(s), 4);
+        assert_eq!(Range::new(0, 2).cursor(s, LogicalCursorShape::Block), 0);
+        assert_eq!(Range::new(0, 3).cursor(s, LogicalCursorShape::Block), 2);
+        assert_eq!(Range::new(3, 6).cursor(s, LogicalCursorShape::Block), 4);
 
         // Reverse ranges.
-        assert_eq!(Range::new(2, 0).cursor(s), 0);
-        assert_eq!(Range::new(6, 2).cursor(s), 2);
-        assert_eq!(Range::new(6, 3).cursor(s), 3);
+        assert_eq!(Range::new(2, 0).cursor(s, LogicalCursorShape::Block), 0);
+        assert_eq!(Range::new(6, 2).cursor(s, LogicalCursorShape::Block), 2);
+        assert_eq!(Range::new(6, 3).cursor(s, LogicalCursorShape::Block), 3);
     }
 
     #[test]
@@ -1253,27 +1273,78 @@ mod test {
         let s = r.slice(..);
 
         // Zero-width ranges.
-        assert_eq!(Range::new(0, 0).put_cursor(s, 0, true), Range::new(0, 2));
-        assert_eq!(Range::new(0, 0).put_cursor(s, 2, true), Range::new(0, 3));
-        assert_eq!(Range::new(2, 3).put_cursor(s, 4, true), Range::new(2, 6));
-        assert_eq!(Range::new(2, 8).put_cursor(s, 4, true), Range::new(2, 6));
-        assert_eq!(Range::new(8, 8).put_cursor(s, 4, true), Range::new(9, 4));
+        assert_eq!(
+            Range::new(0, 0).put_cursor(s, 0, true, LogicalCursorShape::Block),
+            Range::new(0, 2)
+        );
+        assert_eq!(
+            Range::new(0, 0).put_cursor(s, 2, true, LogicalCursorShape::Block),
+            Range::new(0, 3)
+        );
+        assert_eq!(
+            Range::new(2, 3).put_cursor(s, 4, true, LogicalCursorShape::Block),
+            Range::new(2, 6)
+        );
+        assert_eq!(
+            Range::new(2, 8).put_cursor(s, 4, true, LogicalCursorShape::Block),
+            Range::new(2, 6)
+        );
+        assert_eq!(
+            Range::new(8, 8).put_cursor(s, 4, true, LogicalCursorShape::Block),
+            Range::new(9, 4)
+        );
 
         // Forward ranges.
-        assert_eq!(Range::new(3, 6).put_cursor(s, 0, true), Range::new(4, 0));
-        assert_eq!(Range::new(3, 6).put_cursor(s, 2, true), Range::new(4, 2));
-        assert_eq!(Range::new(3, 6).put_cursor(s, 3, true), Range::new(3, 4));
-        assert_eq!(Range::new(3, 6).put_cursor(s, 4, true), Range::new(3, 6));
-        assert_eq!(Range::new(3, 6).put_cursor(s, 6, true), Range::new(3, 7));
-        assert_eq!(Range::new(3, 6).put_cursor(s, 8, true), Range::new(3, 9));
+        assert_eq!(
+            Range::new(3, 6).put_cursor(s, 0, true, LogicalCursorShape::Block),
+            Range::new(4, 0)
+        );
+        assert_eq!(
+            Range::new(3, 6).put_cursor(s, 2, true, LogicalCursorShape::Block),
+            Range::new(4, 2)
+        );
+        assert_eq!(
+            Range::new(3, 6).put_cursor(s, 3, true, LogicalCursorShape::Block),
+            Range::new(3, 4)
+        );
+        assert_eq!(
+            Range::new(3, 6).put_cursor(s, 4, true, LogicalCursorShape::Block),
+            Range::new(3, 6)
+        );
+        assert_eq!(
+            Range::new(3, 6).put_cursor(s, 6, true, LogicalCursorShape::Block),
+            Range::new(3, 7)
+        );
+        assert_eq!(
+            Range::new(3, 6).put_cursor(s, 8, true, LogicalCursorShape::Block),
+            Range::new(3, 9)
+        );
 
         // Reverse ranges.
-        assert_eq!(Range::new(6, 3).put_cursor(s, 0, true), Range::new(6, 0));
-        assert_eq!(Range::new(6, 3).put_cursor(s, 2, true), Range::new(6, 2));
-        assert_eq!(Range::new(6, 3).put_cursor(s, 3, true), Range::new(6, 3));
-        assert_eq!(Range::new(6, 3).put_cursor(s, 4, true), Range::new(6, 4));
-        assert_eq!(Range::new(6, 3).put_cursor(s, 6, true), Range::new(4, 7));
-        assert_eq!(Range::new(6, 3).put_cursor(s, 8, true), Range::new(4, 9));
+        assert_eq!(
+            Range::new(6, 3).put_cursor(s, 0, true, LogicalCursorShape::Block,),
+            Range::new(6, 0)
+        );
+        assert_eq!(
+            Range::new(6, 3).put_cursor(s, 2, true, LogicalCursorShape::Block,),
+            Range::new(6, 2)
+        );
+        assert_eq!(
+            Range::new(6, 3).put_cursor(s, 3, true, LogicalCursorShape::Block,),
+            Range::new(6, 3)
+        );
+        assert_eq!(
+            Range::new(6, 3).put_cursor(s, 4, true, LogicalCursorShape::Block,),
+            Range::new(6, 4)
+        );
+        assert_eq!(
+            Range::new(6, 3).put_cursor(s, 6, true, LogicalCursorShape::Block,),
+            Range::new(4, 7)
+        );
+        assert_eq!(
+            Range::new(6, 3).put_cursor(s, 8, true, LogicalCursorShape::Block,),
+            Range::new(4, 9)
+        );
     }
 
     #[test]

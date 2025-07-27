@@ -158,9 +158,11 @@ pub fn line_numbers<'doc>(
     let linenr = theme.get("ui.linenr");
     let linenr_select = theme.get("ui.linenr.selected");
 
-    let current_line = doc
-        .text()
-        .char_to_line(doc.selection(view.id).primary().cursor(text));
+    let current_line = doc.text().char_to_line(
+        doc.selection(view.id)
+            .primary()
+            .cursor(text, editor.config.load().logical_cursor_shape),
+    );
 
     let line_number = editor.config().line_number;
     let mode = editor.mode;

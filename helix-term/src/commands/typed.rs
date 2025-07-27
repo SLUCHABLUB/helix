@@ -1273,8 +1273,12 @@ fn get_character_info(
 
     let (view, doc) = current_ref!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
-    let grapheme_start = doc.selection(view.id).primary().cursor(text);
+    let grapheme_start = doc
+        .selection(view.id)
+        .primary()
+        .cursor(text, logical_cursor_shape);
     let grapheme_end = graphemes::next_grapheme_boundary(text, grapheme_start);
 
     if grapheme_start == grapheme_end {
@@ -1710,8 +1714,12 @@ fn tree_sitter_scopes(
 
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
-    let pos = doc.selection(view.id).primary().cursor(text);
+    let pos = doc
+        .selection(view.id)
+        .primary()
+        .cursor(text, logical_cursor_shape);
     let scopes = indent::get_scopes(doc.syntax(), text, pos);
 
     let contents = format!("```json\n{:?}\n````", scopes);
@@ -1746,7 +1754,11 @@ fn tree_sitter_highlight_name(
         return Ok(());
     };
     let text = doc.text().slice(..);
-    let cursor = doc.selection(view.id).primary().cursor(text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(text, logical_cursor_shape);
     let byte = text.char_to_byte(cursor) as u32;
     // Query the same range as the one used in syntax highlighting.
     let range = {

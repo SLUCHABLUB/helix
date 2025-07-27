@@ -6,9 +6,9 @@ use crate::chars::{categorize_char, char_is_whitespace, CharCategory};
 use crate::graphemes::{next_grapheme_boundary, prev_grapheme_boundary};
 use crate::line_ending::rope_is_line_ending;
 use crate::movement::Direction;
-use crate::syntax;
 use crate::Range;
 use crate::{surround, Syntax};
+use crate::{syntax, LogicalCursorShape};
 
 fn find_word_boundary(slice: RopeSlice, mut pos: usize, direction: Direction, long: bool) -> usize {
     use CharCategory::{Eol, Whitespace};
@@ -74,8 +74,9 @@ pub fn textobject_word(
     textobject: TextObject,
     _count: usize,
     long: bool,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    let pos = range.cursor(slice);
+    let pos = range.cursor(slice, logical_cursor_shape);
 
     let word_start = find_word_boundary(slice, pos, Direction::Backward, long);
     let word_end = match slice.get_char(pos).map(categorize_char) {
@@ -116,13 +117,14 @@ pub fn textobject_paragraph(
     range: Range,
     textobject: TextObject,
     count: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    let mut line = range.cursor_line(slice);
+    let mut line = range.cursor_line(slice, logical_cursor_shape);
     let prev_line_empty = rope_is_line_ending(slice.line(line.saturating_sub(1)));
     let curr_line_empty = rope_is_line_ending(slice.line(line));
     let next_line_empty = rope_is_line_ending(slice.line(line.saturating_sub(1)));
-    let last_char =
-        prev_grapheme_boundary(slice, slice.line_to_char(line + 1)) == range.cursor(slice);
+    let last_char = prev_grapheme_boundary(slice, slice.line_to_char(line + 1))
+        == range.cursor(slice, logical_cursor_shape);
     let prev_empty_to_line = prev_line_empty && !curr_line_empty;
     let curr_empty_to_line = curr_line_empty && !next_line_empty;
 
@@ -204,8 +206,17 @@ pub fn textobject_pair_surround(
     textobject: TextObject,
     ch: char,
     count: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    textobject_pair_surround_impl(syntax, slice, range, textobject, Some(ch), count)
+    textobject_pair_surround_impl(
+        syntax,
+        slice,
+        range,
+        textobject,
+        Some(ch),
+        count,
+        logical_cursor_shape,
+    )
 }
 
 pub fn textobject_pair_surround_closest(
@@ -214,8 +225,17 @@ pub fn textobject_pair_surround_closest(
     range: Range,
     textobject: TextObject,
     count: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    textobject_pair_surround_impl(syntax, slice, range, textobject, None, count)
+    textobject_pair_surround_impl(
+        syntax,
+        slice,
+        range,
+        textobject,
+        None,
+        count,
+        logical_cursor_shape,
+    )
 }
 
 fn textobject_pair_surround_impl(
@@ -225,9 +245,10 @@ fn textobject_pair_surround_impl(
     textobject: TextObject,
     ch: Option<char>,
     count: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
     let pair_pos = match ch {
-        Some(ch) => surround::find_nth_pairs_pos(slice, ch, range, count),
+        Some(ch) => surround::find_nth_pairs_pos(slice, ch, range, count, logical_cursor_shape),
         None => surround::find_nth_closest_pairs_pos(syntax, slice, range, count),
     };
     pair_pos
@@ -262,11 +283,12 @@ pub fn textobject_treesitter(
     syntax: &Syntax,
     loader: &syntax::Loader,
     _count: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
     let root = syntax.tree().root_node();
     let textobject_query = loader.textobject_query(syntax.root_language());
     let get_range = move || -> Option<Range> {
-        let byte_pos = slice.char_to_byte(range.cursor(slice));
+        let byte_pos = slice.char_to_byte(range.cursor(slice, logical_cursor_shape));
 
         let capture_name = format!("{}.{}", object_name, textobject); // eg. function.inner
         let node = textobject_query?
@@ -400,7 +422,8 @@ mod test {
                 let (pos, objtype, expected_range) = case;
                 // cursor is a single width selection
                 let range = Range::new(pos, pos + 1);
-                let result = textobject_word(slice, range, objtype, 1, false);
+                let result =
+                    textobject_word(slice, range, objtype, 1, false, LogicalCursorShape::Block);
                 assert_eq!(
                     result,
                     expected_range.into(),
@@ -436,8 +459,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection = selection
-                .transform(|r| textobject_paragraph(text.slice(..), r, TextObject::Inside, 1));
+            let selection = selection.transform(|r| {
+                textobject_paragraph(
+                    text.slice(..),
+                    r,
+                    TextObject::Inside,
+                    1,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -459,8 +489,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection = selection
-                .transform(|r| textobject_paragraph(text.slice(..), r, TextObject::Inside, 2));
+            let selection = selection.transform(|r| {
+                textobject_paragraph(
+                    text.slice(..),
+                    r,
+                    TextObject::Inside,
+                    2,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -490,8 +527,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection = selection
-                .transform(|r| textobject_paragraph(text.slice(..), r, TextObject::Around, 1));
+            let selection = selection.transform(|r| {
+                textobject_paragraph(
+                    text.slice(..),
+                    r,
+                    TextObject::Around,
+                    1,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -575,8 +619,15 @@ mod test {
             let slice = doc.slice(..);
             for &case in scenario {
                 let (pos, objtype, expected_range, ch, count) = case;
-                let result =
-                    textobject_pair_surround(None, slice, Range::point(pos), objtype, ch, count);
+                let result = textobject_pair_surround(
+                    None,
+                    slice,
+                    Range::point(pos),
+                    objtype,
+                    ch,
+                    count,
+                    LogicalCursorShape::Block,
+                );
                 assert_eq!(
                     result,
                     expected_range.into(),

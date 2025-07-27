@@ -40,8 +40,8 @@ use helix_core::{
     text_annotations::{Overlay, TextAnnotations},
     textobject,
     unicode::width::UnicodeWidthChar,
-    visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
-    Selection, SmallVec, Syntax, Tendril, Transaction,
+    visual_offset_from_block, Deletion, LineEnding, LogicalCursorShape, Position, Range, Rope,
+    RopeReader, RopeSlice, Selection, SmallVec, Syntax, Tendril, Transaction,
 };
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
@@ -717,13 +717,22 @@ impl PartialEq for MappableCommand {
 
 fn no_op(_cx: &mut Context) {}
 
-type MoveFn =
-    fn(RopeSlice, Range, Direction, usize, Movement, &TextFormat, &mut TextAnnotations) -> Range;
+type MoveFn = fn(
+    RopeSlice,
+    Range,
+    Direction,
+    usize,
+    Movement,
+    &TextFormat,
+    &mut TextAnnotations,
+    LogicalCursorShape,
+) -> Range;
 
 fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movement) {
     let count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let text_fmt = doc.text_format(view.inner_area(doc).width, None);
     let mut annotations = view.text_annotations(doc, None);
 
@@ -736,6 +745,7 @@ fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movem
             behaviour,
             &text_fmt,
             &mut annotations,
+            logical_cursor_shape,
         )
     });
     drop(annotations);
@@ -814,15 +824,21 @@ fn extend_visual_line_down(cx: &mut Context) {
 
 fn goto_line_end_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = range.cursor_line(text, logical_cursor_shape);
         let line_start = text.line_to_char(line);
 
         let pos = graphemes::prev_grapheme_boundary(text, line_end_char_index(&text, line))
             .max(line_start);
 
-        range.put_cursor(text, pos, movement == Movement::Extend)
+        range.put_cursor(
+            text,
+            pos,
+            movement == Movement::Extend,
+            logical_cursor_shape,
+        )
     });
     doc.set_selection(view.id, selection);
 }
@@ -847,12 +863,18 @@ fn extend_to_line_end(cx: &mut Context) {
 
 fn goto_line_end_newline_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = range.cursor_line(text, logical_cursor_shape);
         let pos = line_end_char_index(&text, line);
 
-        range.put_cursor(text, pos, movement == Movement::Extend)
+        range.put_cursor(
+            text,
+            pos,
+            movement == Movement::Extend,
+            logical_cursor_shape,
+        )
     });
     doc.set_selection(view.id, selection);
 }
@@ -877,13 +899,19 @@ fn extend_to_line_end_newline(cx: &mut Context) {
 
 fn goto_line_start_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = range.cursor_line(text, logical_cursor_shape);
 
         // adjust to start of the line
         let pos = text.line_to_char(line);
-        range.put_cursor(text, pos, movement == Movement::Extend)
+        range.put_cursor(
+            text,
+            pos,
+            movement == Movement::Extend,
+            logical_cursor_shape,
+        )
     });
     doc.set_selection(view.id, selection);
 }
@@ -942,10 +970,10 @@ fn extend_to_line_start(cx: &mut Context) {
 fn kill_to_line_start(cx: &mut Context) {
     delete_by_selection_insert_mode(
         cx,
-        move |text, range| {
-            let line = range.cursor_line(text);
+        move |text, range, logical_cursor_shape| {
+            let line = range.cursor_line(text, logical_cursor_shape);
             let first_char = text.line_to_char(line);
-            let anchor = range.cursor(text);
+            let anchor = range.cursor(text, logical_cursor_shape);
             let head = if anchor == first_char && line != 0 {
                 // select until previous line
                 line_end_char_index(&text, line - 1)
@@ -970,10 +998,10 @@ fn kill_to_line_start(cx: &mut Context) {
 fn kill_to_line_end(cx: &mut Context) {
     delete_by_selection_insert_mode(
         cx,
-        |text, range| {
-            let line = range.cursor_line(text);
+        |text, range, logical_cursor_shape| {
+            let line = range.cursor_line(text, logical_cursor_shape);
             let line_end_pos = line_end_char_index(&text, line);
-            let pos = range.cursor(text);
+            let pos = range.cursor(text, logical_cursor_shape);
 
             // if the cursor is on the newline char delete that
             if pos == line_end_pos {
@@ -1007,13 +1035,19 @@ fn extend_to_first_nonwhitespace(cx: &mut Context) {
 
 fn goto_first_nonwhitespace_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = range.cursor_line(text, logical_cursor_shape);
 
         if let Some(pos) = text.line(line).first_non_whitespace_char() {
             let pos = pos + text.line_to_char(line);
-            range.put_cursor(text, pos, movement == Movement::Extend)
+            range.put_cursor(
+                text,
+                pos,
+                movement == Movement::Extend,
+                logical_cursor_shape,
+            )
         } else {
             range
         }
@@ -1154,10 +1188,15 @@ fn goto_window(cx: &mut Context, align: Align) {
         .expect("visual_line was constrained to the view area");
 
     let text = doc.text().slice(..);
-    let selection = doc
-        .selection(view.id)
-        .clone()
-        .transform(|range| range.put_cursor(text, pos, cx.editor.mode == Mode::Select));
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        range.put_cursor(
+            text,
+            pos,
+            cx.editor.mode == Mode::Select,
+            logical_cursor_shape,
+        )
+    });
     doc.set_selection(view.id, selection);
 }
 
@@ -1238,12 +1277,13 @@ fn move_next_sub_word_end(cx: &mut Context) {
 
 fn goto_para_impl<F>(cx: &mut Context, move_fn: F)
 where
-    F: Fn(RopeSlice, Range, usize, Movement) -> Range + 'static,
+    F: Fn(RopeSlice, Range, usize, Movement, LogicalCursorShape) -> Range + 'static,
 {
     let count = cx.count();
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let behavior = if editor.mode == Mode::Select {
             Movement::Extend
         } else {
@@ -1253,7 +1293,7 @@ where
         let selection = doc
             .selection(view.id)
             .clone()
-            .transform(|range| move_fn(text, range, count, behavior));
+            .transform(|range| move_fn(text, range, count, behavior, logical_cursor_shape));
         doc.set_selection(view.id, selection);
     };
     cx.editor.apply_motion(motion)
@@ -1281,10 +1321,10 @@ fn goto_file_start_impl(cx: &mut Context, movement: Movement) {
     } else {
         let (view, doc) = current!(cx.editor);
         let text = doc.text().slice(..);
-        let selection = doc
-            .selection(view.id)
-            .clone()
-            .transform(|range| range.put_cursor(text, 0, movement == Movement::Extend));
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+        let selection = doc.selection(view.id).clone().transform(|range| {
+            range.put_cursor(text, 0, movement == Movement::Extend, logical_cursor_shape)
+        });
         push_jump(view, doc);
         doc.set_selection(view.id, selection);
     }
@@ -1301,11 +1341,16 @@ fn extend_to_file_end(cx: &mut Context) {
 fn goto_file_end_impl(cx: &mut Context, movement: Movement) {
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let pos = doc.text().len_chars();
-    let selection = doc
-        .selection(view.id)
-        .clone()
-        .transform(|range| range.put_cursor(text, pos, movement == Movement::Extend));
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        range.put_cursor(
+            text,
+            pos,
+            movement == Movement::Extend,
+            logical_cursor_shape,
+        )
+    });
     push_jump(view, doc);
     doc.set_selection(view.id, selection);
 }
@@ -1326,6 +1371,7 @@ fn goto_file_vsplit(cx: &mut Context) {
 fn goto_file_impl(cx: &mut Context, action: Action) {
     let (view, doc) = current_ref!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let selections = doc.selection(view.id);
     let primary = selections.primary();
     let rel_path = doc
@@ -1336,7 +1382,7 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
     let paths: Vec<_> = if selections.len() == 1 && primary.len() == 1 {
         // Cap the search at roughly 1k bytes around the cursor.
         let lookaround = 1000;
-        let pos = text.char_to_byte(primary.cursor(text));
+        let pos = text.char_to_byte(primary.cursor(text, logical_cursor_shape));
         let search_start = text
             .line_to_byte(text.byte_to_line(pos))
             .max(text.floor_char_boundary(pos.saturating_sub(lookaround)));
@@ -1425,11 +1471,12 @@ where
     let count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
         let word = extend_fn(text, range, count);
-        let pos = word.cursor(text);
-        range.put_cursor(text, pos, true)
+        let pos = word.cursor(text, logical_cursor_shape);
+        range.put_cursor(text, pos, true, logical_cursor_shape)
     });
     doc.set_selection(view.id, selection);
 }
@@ -1496,10 +1543,11 @@ fn find_char_line_ending(
 ) {
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let cursor = range.cursor(text);
-        let cursor_line = range.cursor_line(text);
+        let cursor = range.cursor(text, logical_cursor_shape);
+        let cursor_line = range.cursor_line(text, logical_cursor_shape);
 
         // Finding the line where we're going to find <ret>. Depends mostly on
         // `count`, but also takes into account edge cases where we're already at the end
@@ -1533,9 +1581,14 @@ fn find_char_line_ending(
         };
 
         if extend {
-            range.put_cursor(text, pos, true)
+            range.put_cursor(text, pos, true, logical_cursor_shape)
         } else {
-            Range::point(range.cursor(text)).put_cursor(text, pos, true)
+            Range::point(range.cursor(text, logical_cursor_shape)).put_cursor(
+                text,
+                pos,
+                true,
+                logical_cursor_shape,
+            )
         }
     });
     doc.set_selection(view.id, selection);
@@ -1599,6 +1652,7 @@ fn find_char_impl<F, M: CharMatcher + Clone + Copy>(
 {
     let (view, doc) = current!(editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
         // TODO: use `Range::cursor()` here instead.  However, that works in terms of
@@ -1612,9 +1666,14 @@ fn find_char_impl<F, M: CharMatcher + Clone + Copy>(
 
         search_fn(text, char_matcher, search_start_pos, count, inclusive).map_or(range, |pos| {
             if extend {
-                range.put_cursor(text, pos, true)
+                range.put_cursor(text, pos, true, logical_cursor_shape)
             } else {
-                Range::point(range.cursor(text)).put_cursor(text, pos, true)
+                Range::point(range.cursor(text, logical_cursor_shape)).put_cursor(
+                    text,
+                    pos,
+                    true,
+                    logical_cursor_shape,
+                )
             }
         })
     });
@@ -1823,8 +1882,9 @@ pub fn scroll(cx: &mut Context, offset: usize, direction: Direction, sync_cursor
 
     let range = doc.selection(view.id).primary();
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
-    let cursor = range.cursor(text);
+    let cursor = range.cursor(text, logical_cursor_shape);
     let height = view.inner_height();
 
     let scrolloff = config.scrolloff.min(height.saturating_sub(1) / 2);
@@ -1868,6 +1928,7 @@ pub fn scroll(cx: &mut Context, offset: usize, direction: Direction, sync_cursor
                 movement,
                 &text_fmt,
                 &mut annotations,
+                logical_cursor_shape,
             )
         });
         drop(annotations);
@@ -1985,6 +2046,7 @@ fn copy_selection_on_line(cx: &mut Context, direction: Direction) {
     let count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let selection = doc.selection(view.id);
     let mut ranges = SmallVec::with_capacity(selection.ranges().len() * (count + 1));
     ranges.extend_from_slice(selection.ranges());
@@ -2044,7 +2106,12 @@ fn copy_selection_on_line(cx: &mut Context, direction: Direction) {
                     primary_index = ranges.len();
                 }
                 // This is Range::new(anchor, head), but it will place the cursor on the correct column
-                ranges.push(Range::point(anchor).put_cursor(text, head, true));
+                ranges.push(Range::point(anchor).put_cursor(
+                    text,
+                    head,
+                    true,
+                    logical_cursor_shape,
+                ));
                 sels += 1;
             }
 
@@ -2909,17 +2976,18 @@ fn delete_selection_impl(cx: &mut Context, op: Operation, yank: YankAction) {
 #[inline]
 fn delete_by_selection_insert_mode(
     cx: &mut Context,
-    mut f: impl FnMut(RopeSlice, &Range) -> Deletion,
+    mut f: impl FnMut(RopeSlice, &Range, LogicalCursorShape) -> Deletion,
     direction: Direction,
 ) {
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let mut selection = SmallVec::new();
     let mut insert_newline = false;
     let text_len = text.len_chars();
     let mut transaction =
         Transaction::delete_by_selection(doc.text(), doc.selection(view.id), |range| {
-            let (start, end) = f(text, range);
+            let (start, end) = f(text, range, logical_cursor_shape);
             if direction == Direction::Forward {
                 let mut range = *range;
                 if range.head > range.anchor {
@@ -2970,9 +3038,10 @@ fn change_selection_noyank(cx: &mut Context) {
 fn collapse_selection(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let pos = range.cursor(text);
+        let pos = range.cursor(text, logical_cursor_shape);
         Range::new(pos, pos)
     });
     doc.set_selection(view.id, selection);
@@ -3203,7 +3272,9 @@ fn buffer_picker(cx: &mut Context) {
     .with_preview(|editor, meta| {
         let doc = &editor.documents.get(&meta.id)?;
         let lines = doc.selections().values().next().map(|selection| {
-            let cursor_line = selection.primary().cursor_line(doc.text().slice(..));
+            let cursor_line = selection
+                .primary()
+                .cursor_line(doc.text().slice(..), doc.config.load().logical_cursor_shape);
             (cursor_line, cursor_line)
         });
         Some((meta.id.into(), lines))
@@ -3296,7 +3367,10 @@ fn jumplist_picker(cx: &mut Context) {
     )
     .with_preview(|editor, meta| {
         let doc = &editor.documents.get(&meta.id)?;
-        let line = meta.selection.primary().cursor_line(doc.text().slice(..));
+        let line = meta
+            .selection
+            .primary()
+            .cursor_line(doc.text().slice(..), doc.config.load().logical_cursor_shape);
         Some((meta.id.into(), Some((line, line))))
     });
     cx.push_layer(Box::new(overlaid(picker)));
@@ -3516,6 +3590,7 @@ fn insert_with_indent(cx: &mut Context, cursor_fallback: IndentFallbackPos) {
     let loader = cx.editor.syn_loader.load();
 
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let contents = doc.text();
     let selection = doc.selection(view.id);
 
@@ -3526,7 +3601,7 @@ fn insert_with_indent(cx: &mut Context, cursor_fallback: IndentFallbackPos) {
     let mut offs = 0;
 
     let mut transaction = Transaction::change_by_selection(contents, selection, |range| {
-        let cursor_line = range.cursor_line(text);
+        let cursor_line = range.cursor_line(text, logical_cursor_shape);
         let cursor_line_start = text.line_to_char(cursor_line);
 
         if line_end_char_index(&text, cursor_line) == cursor_line_start {
@@ -3563,7 +3638,12 @@ fn insert_with_indent(cx: &mut Context, cursor_fallback: IndentFallbackPos) {
                 IndentFallbackPos::LineEnd => line_end_char_index(&text, cursor_line),
             };
 
-            ranges.push(range.put_cursor(text, pos + offs, cx.editor.mode == Mode::Select));
+            ranges.push(range.put_cursor(
+                text,
+                pos + offs,
+                cx.editor.mode == Mode::Select,
+                logical_cursor_shape,
+            ));
 
             (cursor_line_start, cursor_line_start, None)
         }
@@ -3801,6 +3881,7 @@ fn goto_line_without_jumplist(
     if let Some(count) = count {
         let (view, doc) = current!(editor);
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let max_line = if text.line(text.len_lines() - 1).len_chars() == 0 {
             // If the last line is blank, don't jump to it.
             text.len_lines().saturating_sub(2)
@@ -3809,10 +3890,14 @@ fn goto_line_without_jumplist(
         };
         let line_idx = std::cmp::min(count.get() - 1, max_line);
         let pos = text.line_to_char(line_idx);
-        let selection = doc
-            .selection(view.id)
-            .clone()
-            .transform(|range| range.put_cursor(text, pos, movement == Movement::Extend));
+        let selection = doc.selection(view.id).clone().transform(|range| {
+            range.put_cursor(
+                text,
+                pos,
+                movement == Movement::Extend,
+                logical_cursor_shape,
+            )
+        });
 
         doc.set_selection(view.id, selection);
     }
@@ -3829,6 +3914,7 @@ fn extend_to_last_line(cx: &mut Context) {
 fn goto_last_line_impl(cx: &mut Context, movement: Movement) {
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let line_idx = if text.line(text.len_lines() - 1).len_chars() == 0 {
         // If the last line is blank, don't jump to it.
         text.len_lines().saturating_sub(2)
@@ -3836,10 +3922,14 @@ fn goto_last_line_impl(cx: &mut Context, movement: Movement) {
         text.len_lines() - 1
     };
     let pos = text.line_to_char(line_idx);
-    let selection = doc
-        .selection(view.id)
-        .clone()
-        .transform(|range| range.put_cursor(text, pos, movement == Movement::Extend));
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        range.put_cursor(
+            text,
+            pos,
+            movement == Movement::Extend,
+            logical_cursor_shape,
+        )
+    });
 
     push_jump(view, doc);
     doc.set_selection(view.id, selection);
@@ -3857,12 +3947,18 @@ fn goto_column_impl(cx: &mut Context, movement: Movement) {
     let count = cx.count();
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = range.cursor_line(text, logical_cursor_shape);
         let line_start = text.line_to_char(line);
         let line_end = line_end_char_index(&text, line);
         let pos = graphemes::nth_next_grapheme_boundary(text, line_start, count - 1).min(line_end);
-        range.put_cursor(text, pos, movement == Movement::Extend)
+        range.put_cursor(
+            text,
+            pos,
+            movement == Movement::Extend,
+            logical_cursor_shape,
+        )
     });
     doc.set_selection(view.id, selection);
 }
@@ -3880,11 +3976,16 @@ fn goto_last_modification(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     let pos = doc.history.get_mut().last_edit_pos();
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     if let Some(pos) = pos {
-        let selection = doc
-            .selection(view.id)
-            .clone()
-            .transform(|range| range.put_cursor(text, pos, cx.editor.mode == Mode::Select));
+        let selection = doc.selection(view.id).clone().transform(|range| {
+            range.put_cursor(
+                text,
+                pos,
+                cx.editor.mode == Mode::Select,
+                logical_cursor_shape,
+            )
+        });
         doc.set_selection(view.id, selection);
     }
 }
@@ -3959,7 +4060,7 @@ fn goto_next_diag(cx: &mut Context) {
         let cursor_pos = doc
             .selection(view.id)
             .primary()
-            .cursor(doc.text().slice(..));
+            .cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
 
         let diag = doc
             .diagnostics()
@@ -3985,7 +4086,7 @@ fn goto_prev_diag(cx: &mut Context) {
         let cursor_pos = doc
             .selection(view.id)
             .primary()
-            .cursor(doc.text().slice(..));
+            .cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
 
         let diag = doc
             .diagnostics()
@@ -4047,6 +4148,7 @@ fn goto_next_change_impl(cx: &mut Context, direction: Direction) {
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
         let doc_text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let diff_handle = if let Some(diff_handle) = doc.diff_handle() {
             diff_handle
         } else {
@@ -4055,7 +4157,7 @@ fn goto_next_change_impl(cx: &mut Context, direction: Direction) {
         };
 
         let selection = doc.selection(view.id).clone().transform(|range| {
-            let cursor_line = range.cursor_line(doc_text) as u32;
+            let cursor_line = range.cursor_line(doc_text, logical_cursor_shape) as u32;
 
             let diff = diff_handle.load();
             let hunk_idx = match direction {
@@ -4123,8 +4225,15 @@ pub mod insert {
 
     // The default insert hook: simply insert the character
     #[allow(clippy::unnecessary_wraps)] // need to use Option<> because of the Hook signature
-    fn insert(doc: &Rope, selection: &Selection, ch: char) -> Option<Transaction> {
-        let cursors = selection.clone().cursors(doc.slice(..));
+    fn insert(
+        doc: &Rope,
+        selection: &Selection,
+        ch: char,
+        logical_cursor_shape: LogicalCursorShape,
+    ) -> Option<Transaction> {
+        let cursors = selection
+            .clone()
+            .cursors(doc.slice(..), logical_cursor_shape);
         let mut t = Tendril::new();
         t.push(ch);
         let transaction = Transaction::insert(doc, &cursors, t);
@@ -4137,13 +4246,14 @@ pub mod insert {
     pub fn insert_char(cx: &mut Context, c: char) {
         let (view, doc) = current_ref!(cx.editor);
         let text = doc.text();
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let selection = doc.selection(view.id);
         let auto_pairs = doc.auto_pairs(cx.editor);
 
         let transaction = auto_pairs
             .as_ref()
-            .and_then(|ap| auto_pairs::hook(text, selection, c, ap))
-            .or_else(|| insert(text, selection, c));
+            .and_then(|ap| auto_pairs::hook(text, selection, c, ap, logical_cursor_shape))
+            .or_else(|| insert(text, selection, c, logical_cursor_shape));
 
         let (view, doc) = current!(cx.editor);
         if let Some(t) = transaction {
@@ -4162,7 +4272,8 @@ pub mod insert {
             Some(SmartTabConfig { enable: true, .. })
         ) {
             let cursors_after_whitespace = doc.selection(view_id).ranges().iter().all(|range| {
-                let cursor = range.cursor(doc.text().slice(..));
+                let cursor =
+                    range.cursor(doc.text().slice(..), doc.config.load().logical_cursor_shape);
                 let current_line_num = doc.text().char_to_line(cursor);
                 let current_line_start = doc.text().line_to_char(current_line_num);
                 let left = doc.text().slice(current_line_start..cursor);
@@ -4190,7 +4301,9 @@ pub mod insert {
         let indent = Tendril::from(doc.indent_style.as_str());
         let transaction = Transaction::insert(
             doc.text(),
-            &doc.selection(view.id).clone().cursors(doc.text().slice(..)),
+            &doc.selection(view.id)
+                .clone()
+                .cursors(doc.text().slice(..), doc.config.load().logical_cursor_shape),
             indent,
         );
         doc.apply(&transaction, view.id);
@@ -4201,6 +4314,7 @@ pub mod insert {
         let (view, doc) = current_ref!(cx.editor);
         let loader = cx.editor.syn_loader.load();
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let line_ending = doc.line_ending.as_str();
 
         let contents = doc.text();
@@ -4222,7 +4336,7 @@ pub mod insert {
         let mut transaction = Transaction::change_by_selection(contents, selection, |range| {
             // Tracks the number of trailing whitespace characters deleted by this selection.
             let mut chars_deleted = 0;
-            let pos = range.cursor(text);
+            let pos = range.cursor(text, logical_cursor_shape);
 
             let prev = if pos == 0 {
                 ' '
@@ -4314,7 +4428,7 @@ pub mod insert {
                 (line_start, line_start, new_text.chars().count() as isize)
             };
 
-            let new_range = if range.cursor(text) > range.anchor {
+            let new_range = if range.cursor(text, logical_cursor_shape) > range.anchor {
                 // when appending, extend the range by local_offs
                 Range::new(
                     (range.anchor as isize + global_offs) as usize,
@@ -4349,17 +4463,19 @@ pub mod insert {
         let count = cx.count();
         let (view, doc) = current_ref!(cx.editor);
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let tab_width = doc.tab_width();
         let indent_width = doc.indent_width();
         let auto_pairs = doc.auto_pairs(cx.editor);
 
         let transaction =
             Transaction::delete_by_selection(doc.text(), doc.selection(view.id), |range| {
-                let pos = range.cursor(text);
+                let pos = range.cursor(text, logical_cursor_shape);
                 if pos == 0 {
                     return (pos, pos);
                 }
-                let line_start_pos = text.line_to_char(range.cursor_line(text));
+                let line_start_pos =
+                    text.line_to_char(range.cursor_line(text, logical_cursor_shape));
                 // consider to delete by indent level if all characters before `pos` are indent units.
                 let fragment = Cow::from(text.slice(line_start_pos..pos));
                 if !fragment.is_empty() && fragment.chars().all(|ch| ch == ' ' || ch == '\t') {
@@ -4428,8 +4544,8 @@ pub mod insert {
         let count = cx.count();
         delete_by_selection_insert_mode(
             cx,
-            |text, range| {
-                let pos = range.cursor(text);
+            |text, range, logical_cursor_shape| {
+                let pos = range.cursor(text, logical_cursor_shape);
                 (pos, graphemes::nth_next_grapheme_boundary(text, pos, count))
             },
             Direction::Forward,
@@ -4440,9 +4556,9 @@ pub mod insert {
         let count = cx.count();
         delete_by_selection_insert_mode(
             cx,
-            |text, range| {
+            |text, range, logical_cursor_shape| {
                 let anchor = movement::move_prev_word_start(text, *range, count).from();
-                let next = Range::new(anchor, range.cursor(text));
+                let next = Range::new(anchor, range.cursor(text, logical_cursor_shape));
                 let range = exclude_cursor(text, next, *range);
                 (range.from(), range.to())
             },
@@ -4454,9 +4570,9 @@ pub mod insert {
         let count = cx.count();
         delete_by_selection_insert_mode(
             cx,
-            |text, range| {
+            |text, range, logical_cursor_shape| {
                 let head = movement::move_next_word_end(text, *range, count).to();
-                (range.cursor(text), head)
+                (range.cursor(text, logical_cursor_shape), head)
             },
             Direction::Forward,
         );
@@ -4674,6 +4790,7 @@ fn paste_impl(
     let mut values = values.iter().map(|value| map_value(value)).chain(repeat);
 
     let text = doc.text();
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let selection = doc.selection(view.id);
 
     let mut offset = 0;
@@ -4693,7 +4810,7 @@ fn paste_impl(
             // paste append
             (Paste::After, false) => range.to(),
             // paste at cursor
-            (Paste::Cursor, _) => range.cursor(text.slice(..)),
+            (Paste::Cursor, _) => range.cursor(text.slice(..), logical_cursor_shape),
         };
 
         let value = values.next();
@@ -5159,7 +5276,8 @@ pub fn completion(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     let range = doc.selection(view.id).primary();
     let text = doc.text().slice(..);
-    let cursor = range.cursor(text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = range.cursor(text, logical_cursor_shape);
 
     cx.editor
         .handlers
@@ -5451,6 +5569,7 @@ fn move_node_bound_impl(cx: &mut Context, dir: Direction, movement: Movement) {
 
         if let Some(syntax) = doc.syntax() {
             let text = doc.text().slice(..);
+            let logical_cursor_shape = doc.config.load().logical_cursor_shape;
             let current_selection = doc.selection(view.id);
 
             let selection = movement::move_parent_node_end(
@@ -5459,6 +5578,7 @@ fn move_node_bound_impl(cx: &mut Context, dir: Direction, movement: Movement) {
                 current_selection.clone(),
                 dir,
                 movement,
+                logical_cursor_shape,
             );
 
             doc.set_selection(view.id, selection);
@@ -5518,15 +5638,16 @@ fn match_brackets(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     let is_select = cx.editor.mode == Mode::Select;
     let text = doc.text();
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let text_slice = text.slice(..);
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let pos = range.cursor(text_slice);
+        let pos = range.cursor(text_slice, logical_cursor_shape);
         if let Some(matched_pos) = doc.syntax().map_or_else(
             || match_brackets::find_matching_bracket_plaintext(text.slice(..), pos),
             |syntax| match_brackets::find_matching_bracket_fuzzy(syntax, text.slice(..), pos),
         ) {
-            range.put_cursor(text_slice, matched_pos, is_select)
+            range.put_cursor(text_slice, matched_pos, is_select, logical_cursor_shape)
         } else {
             range
         }
@@ -5790,7 +5911,11 @@ fn align_view_middle(cx: &mut Context) {
         return;
     }
     let doc_text = doc.text().slice(..);
-    let pos = doc.selection(view.id).primary().cursor(doc_text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let pos = doc
+        .selection(view.id)
+        .primary()
+        .cursor(doc_text, logical_cursor_shape);
     let pos = visual_offset_from_block(
         doc_text,
         doc.view_offset(view.id).anchor,
@@ -5822,11 +5947,20 @@ fn goto_ts_object_impl(cx: &mut Context, object: &'static str, direction: Direct
         let loader = editor.syn_loader.load();
         if let Some(syntax) = doc.syntax() {
             let text = doc.text().slice(..);
+            let logical_cursor_shape = doc.config.load().logical_cursor_shape;
             let root = syntax.tree().root_node();
 
             let selection = doc.selection(view.id).clone().transform(|range| {
                 let new_range = movement::goto_treesitter_object(
-                    text, range, object, direction, &root, syntax, &loader, count,
+                    text,
+                    range,
+                    object,
+                    direction,
+                    &root,
+                    syntax,
+                    &loader,
+                    count,
+                    logical_cursor_shape,
                 );
 
                 if editor.mode == Mode::Select {
@@ -5924,13 +6058,21 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
                 let (view, doc) = current!(editor);
                 let loader = editor.syn_loader.load();
                 let text = doc.text().slice(..);
+                let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
                 let textobject_treesitter = |obj_name: &str, range: Range| -> Range {
                     let Some(syntax) = doc.syntax() else {
                         return range;
                     };
                     textobject::textobject_treesitter(
-                        text, range, objtype, obj_name, syntax, &loader, count,
+                        text,
+                        range,
+                        objtype,
+                        obj_name,
+                        syntax,
+                        &loader,
+                        count,
+                        logical_cursor_shape,
                     )
                 };
 
@@ -5942,7 +6084,7 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
                 let textobject_change = |range: Range| -> Range {
                     let diff_handle = doc.diff_handle().unwrap();
                     let diff = diff_handle.load();
-                    let line = range.cursor_line(text);
+                    let line = range.cursor_line(text, logical_cursor_shape);
                     let hunk_idx = if let Some(hunk_idx) = diff.hunk_at(line as u32, false) {
                         hunk_idx
                     } else {
@@ -5957,8 +6099,22 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
 
                 let selection = doc.selection(view.id).clone().transform(|range| {
                     match ch {
-                        'w' => textobject::textobject_word(text, range, objtype, count, false),
-                        'W' => textobject::textobject_word(text, range, objtype, count, true),
+                        'w' => textobject::textobject_word(
+                            text,
+                            range,
+                            objtype,
+                            count,
+                            false,
+                            logical_cursor_shape,
+                        ),
+                        'W' => textobject::textobject_word(
+                            text,
+                            range,
+                            objtype,
+                            count,
+                            true,
+                            logical_cursor_shape,
+                        ),
                         't' => textobject_treesitter("class", range),
                         'f' => textobject_treesitter("function", range),
                         'a' => textobject_treesitter("parameter", range),
@@ -5966,13 +6122,20 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
                         'T' => textobject_treesitter("test", range),
                         'e' => textobject_treesitter("entry", range),
                         'x' => textobject_treesitter("xml-element", range),
-                        'p' => textobject::textobject_paragraph(text, range, objtype, count),
+                        'p' => textobject::textobject_paragraph(
+                            text,
+                            range,
+                            objtype,
+                            count,
+                            logical_cursor_shape,
+                        ),
                         'm' => textobject::textobject_pair_surround_closest(
                             doc.syntax(),
                             text,
                             range,
                             objtype,
                             count,
+                            logical_cursor_shape,
                         ),
                         'g' => textobject_change(range),
                         // TODO: cancel new ranges if inconsistent surround matches across lines
@@ -5983,6 +6146,7 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
                             objtype,
                             ch,
                             count,
+                            logical_cursor_shape,
                         ),
                         _ => range,
                     }
@@ -6088,16 +6252,23 @@ fn surround_replace(cx: &mut Context) {
         };
         let (view, doc) = current!(cx.editor);
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let selection = doc.selection(view.id);
 
-        let change_pos =
-            match surround::get_surround_pos(doc.syntax(), text, selection, surround_ch, count) {
-                Ok(c) => c,
-                Err(err) => {
-                    cx.editor.set_error(err.to_string());
-                    return;
-                }
-            };
+        let change_pos = match surround::get_surround_pos(
+            doc.syntax(),
+            text,
+            selection,
+            surround_ch,
+            count,
+            logical_cursor_shape,
+        ) {
+            Ok(c) => c,
+            Err(err) => {
+                cx.editor.set_error(err.to_string());
+                return;
+            }
+        };
 
         let selection = selection.clone();
         let ranges: SmallVec<[Range; 1]> = change_pos.iter().map(|&p| Range::point(p)).collect();
@@ -6159,16 +6330,23 @@ fn surround_delete(cx: &mut Context) {
         };
         let (view, doc) = current!(cx.editor);
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let selection = doc.selection(view.id);
 
-        let mut change_pos =
-            match surround::get_surround_pos(doc.syntax(), text, selection, surround_ch, count) {
-                Ok(c) => c,
-                Err(err) => {
-                    cx.editor.set_error(err.to_string());
-                    return;
-                }
-            };
+        let mut change_pos = match surround::get_surround_pos(
+            doc.syntax(),
+            text,
+            selection,
+            surround_ch,
+            count,
+            logical_cursor_shape,
+        ) {
+            Ok(c) => c,
+            Err(err) => {
+                cx.editor.set_error(err.to_string());
+                return;
+            }
+        };
         change_pos.sort_unstable(); // the changeset has to be sorted to allow nested surrounds
         let transaction =
             Transaction::change(doc.text(), change_pos.into_iter().map(|p| (p, p + 1, None)));
@@ -6756,6 +6934,7 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
     let mut words = Vec::with_capacity(jump_label_limit);
     let (view, doc) = current_ref!(cx.editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     // This is not necessarily exact if there is virtual text like soft wrap.
     // It's ok though because the extra jump labels will not be rendered.
@@ -6763,7 +6942,7 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
     let end = text.line_to_char(view.estimate_last_doc_line(doc) + 1);
 
     let primary_selection = doc.selection(view.id).primary();
-    let cursor = primary_selection.cursor(text);
+    let cursor = primary_selection.cursor(text, logical_cursor_shape);
     let mut cursor_fwd = Range::point(cursor);
     let mut cursor_rev = Range::point(cursor);
     if text.get_char(cursor).is_some_and(|c| !c.is_whitespace()) {

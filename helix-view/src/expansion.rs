@@ -214,14 +214,21 @@ fn expand_inner<'a>(editor: &Editor, content: Cow<'a, str>) -> Result<Cow<'a, st
 fn expand_variable(editor: &Editor, variable: Variable) -> Result<Cow<'static, str>> {
     let (view, doc) = current_ref!(editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
     match variable {
         Variable::CursorLine => {
-            let cursor_line = doc.selection(view.id).primary().cursor_line(text);
+            let cursor_line = doc
+                .selection(view.id)
+                .primary()
+                .cursor_line(text, logical_cursor_shape);
             Ok(Cow::Owned((cursor_line + 1).to_string()))
         }
         Variable::CursorColumn => {
-            let cursor = doc.selection(view.id).primary().cursor(text);
+            let cursor = doc
+                .selection(view.id)
+                .primary()
+                .cursor(text, logical_cursor_shape);
             let position = helix_core::coords_at_pos(text, cursor);
             Ok(Cow::Owned((position.col + 1).to_string()))
         }

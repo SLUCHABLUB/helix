@@ -1323,8 +1323,13 @@ impl Document {
     /// Select text within the [`Document`].
     pub fn set_selection(&mut self, view_id: ViewId, selection: Selection) {
         // TODO: use a transaction?
-        self.selections
-            .insert(view_id, selection.ensure_invariants(self.text().slice(..)));
+        self.selections.insert(
+            view_id,
+            selection.ensure_invariants(
+                self.text().slice(..),
+                self.config.load().logical_cursor_shape,
+            ),
+        );
         helix_event::dispatch(SelectionDidChange {
             doc: self,
             view: view_id,
@@ -1390,7 +1395,10 @@ impl Document {
             if let Some(selection) = transaction.selection() {
                 self.selections.insert(
                     view_id,
-                    selection.clone().ensure_invariants(self.text.slice(..)),
+                    selection.clone().ensure_invariants(
+                        self.text.slice(..),
+                        self.config.load().logical_cursor_shape,
+                    ),
                 );
                 helix_event::dispatch(SelectionDidChange {
                     doc: self,
@@ -1409,7 +1417,7 @@ impl Document {
                 // Map through changes
                 .map(transaction.changes())
                 // Ensure all selections across all views still adhere to invariants.
-                .ensure_invariants(self.text.slice(..));
+                .ensure_invariants(self.text.slice(..), self.config.load().logical_cursor_shape);
         }
 
         for view_data in self.view_data.values_mut() {
@@ -1532,7 +1540,10 @@ impl Document {
         if let Some(selection) = transaction.selection() {
             self.selections.insert(
                 view_id,
-                selection.clone().ensure_invariants(self.text.slice(..)),
+                selection.clone().ensure_invariants(
+                    self.text.slice(..),
+                    self.config.load().logical_cursor_shape,
+                ),
             );
             helix_event::dispatch(SelectionDidChange {
                 doc: self,
@@ -2021,7 +2032,9 @@ impl Document {
 
         helix_lsp::util::pos_to_lsp_pos(
             text,
-            self.selection(view_id).primary().cursor(text.slice(..)),
+            self.selection(view_id)
+                .primary()
+                .cursor(text.slice(..), self.config.load().logical_cursor_shape),
             offset_encoding,
         )
     }

@@ -67,7 +67,7 @@ pub mod util {
     use super::*;
     use helix_core::line_ending::{line_end_byte_index, line_end_char_index};
     use helix_core::snippets::{RenderedSnippet, Snippet, SnippetRenderCtx};
-    use helix_core::{chars, RopeSlice};
+    use helix_core::{chars, LogicalCursorShape, RopeSlice};
     use helix_core::{diagnostic::NumberOrString, Range, Rope, Selection, Tendril, Transaction};
 
     /// Converts a diagnostic in the document to [`lsp::Diagnostic`].
@@ -320,6 +320,7 @@ pub mod util {
         edit_offset: Option<(i128, i128)>,
         replace_mode: bool,
         new_text: String,
+        logical_cursor_shape: LogicalCursorShape,
     ) -> Transaction {
         let replacement: Option<Tendril> = if new_text.is_empty() {
             None
@@ -332,7 +333,7 @@ pub mod util {
             text,
             edit_offset,
             replace_mode,
-            selection.primary().cursor(text),
+            selection.primary().cursor(text, logical_cursor_shape),
         )
         .expect("transaction must be valid for primary selection");
         let removed_text = text.slice(removed_start..removed_end);
@@ -341,7 +342,7 @@ pub mod util {
             doc,
             selection,
             |range| {
-                let cursor = range.cursor(text);
+                let cursor = range.cursor(text, logical_cursor_shape);
                 completion_range(text, edit_offset, replace_mode, cursor)
                     .filter(|(start, end)| text.slice(start..end) == removed_text)
                     .unwrap_or_else(|| find_completion_range(text, replace_mode, cursor))
@@ -364,13 +365,14 @@ pub mod util {
         replace_mode: bool,
         snippet: Snippet,
         cx: &mut SnippetRenderCtx,
+        logical_cursor_shape: LogicalCursorShape,
     ) -> (Transaction, RenderedSnippet) {
         let text = doc.slice(..);
         let (removed_start, removed_end) = completion_range(
             text,
             edit_offset,
             replace_mode,
-            selection.primary().cursor(text),
+            selection.primary().cursor(text, logical_cursor_shape),
         )
         .expect("transaction must be valid for primary selection");
         let removed_text = text.slice(removed_start..removed_end);
@@ -378,7 +380,7 @@ pub mod util {
             doc,
             selection,
             |range| {
-                let cursor = range.cursor(text);
+                let cursor = range.cursor(text, logical_cursor_shape);
                 completion_range(text, edit_offset, replace_mode, cursor)
                     .filter(|(start, end)| text.slice(start..end) == removed_text)
                     .unwrap_or_else(|| find_completion_range(text, replace_mode, cursor))

@@ -1080,12 +1080,20 @@ pub fn rename_symbol(cx: &mut Context) {
     fn get_prefill_from_word_boundary(editor: &Editor) -> String {
         let (view, doc) = current_ref!(editor);
         let text = doc.text().slice(..);
+        let logical_cursor_shape = doc.config.load().logical_cursor_shape;
         let primary_selection = doc.selection(view.id).primary();
         if primary_selection.len() > 1 {
             primary_selection
         } else {
             use helix_core::textobject::{textobject_word, TextObject};
-            textobject_word(text, primary_selection, TextObject::Inside, 1, false)
+            textobject_word(
+                text,
+                primary_selection,
+                TextObject::Inside,
+                1,
+                false,
+                logical_cursor_shape,
+            )
         }
         .fragment(text)
         .into()
@@ -1236,7 +1244,11 @@ pub fn select_references_to_symbol_under_cursor(cx: &mut Context) {
             };
             let (view, doc) = current!(editor);
             let text = doc.text();
-            let pos = doc.selection(view.id).primary().cursor(text.slice(..));
+            let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+            let pos = doc
+                .selection(view.id)
+                .primary()
+                .cursor(text.slice(..), logical_cursor_shape);
 
             // We must find the range that contains our primary cursor to prevent our primary cursor to move
             let mut primary_index = 0;

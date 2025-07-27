@@ -49,7 +49,7 @@ use helix_core::{
         self,
         config::{AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap},
     },
-    Change, LineEnding, Position, Range, Selection, Uri, NATIVE_LINE_ENDING,
+    Change, LineEnding, LogicalCursorShape, Position, Range, Selection, Uri, NATIVE_LINE_ENDING,
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
 use helix_lsp::lsp;
@@ -379,6 +379,8 @@ pub struct Config {
     /// Whether to read settings from [EditorConfig](https://editorconfig.org) files. Defaults to
     /// `true`.
     pub editor_config: bool,
+    /// The logical shape of the cursor.
+    pub logical_cursor_shape: LogicalCursorShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Eq, PartialOrd, Ord)]
@@ -1055,6 +1057,7 @@ impl Default for Config {
             end_of_line_diagnostics: DiagnosticFilter::Disable,
             clipboard_provider: ClipboardProvider::default(),
             editor_config: true,
+            logical_cursor_shape: LogicalCursorShape::Block,
         }
     }
 }
@@ -2318,17 +2321,20 @@ fn try_restore_indent(doc: &mut Document, view: &mut View) {
         }
     }
 
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+
     let doc_changes = doc.changes().changes();
     let text = doc.text().slice(..);
     let range = doc.selection(view.id).primary();
-    let pos = range.cursor(text);
-    let line_end_pos = line_end_char_index(&text, range.cursor_line(text));
+    let pos = range.cursor(text, logical_cursor_shape);
+    let line_end_pos = line_end_char_index(&text, range.cursor_line(text, logical_cursor_shape));
 
     if inserted_a_new_blank_line(doc_changes, pos, line_end_pos) {
         // Removes tailing whitespaces.
         let transaction =
             Transaction::change_by_selection(doc.text(), doc.selection(view.id), |range| {
-                let line_start_pos = text.line_to_char(range.cursor_line(text));
+                let line_start_pos =
+                    text.line_to_char(range.cursor_line(text, logical_cursor_shape));
                 (line_start_pos, pos, None)
             });
         doc.apply(&transaction, view.id);
@@ -2345,7 +2351,10 @@ impl CursorCache {
         }
 
         let text = doc.text().slice(..);
-        let cursor = doc.selection(view.id).primary().cursor(text);
+        let cursor = doc
+            .selection(view.id)
+            .primary()
+            .cursor(text, doc.config.load().logical_cursor_shape);
         let res = view.screen_coords_at_pos(doc, text, cursor);
         self.set(res);
         res

@@ -1,5 +1,4 @@
-use std::borrow::Cow;
-
+use arc_swap::access::Access;
 use helix_core::indent::IndentStyle;
 use helix_core::{coords_at_pos, encoding, Position};
 use helix_lsp::lsp::DiagnosticSeverity;
@@ -10,6 +9,7 @@ use helix_view::{
     theme::Style,
     Document, Editor, View,
 };
+use std::borrow::Cow;
 
 use crate::ui::ProgressSpinners;
 
@@ -360,11 +360,10 @@ where
 fn get_position(context: &RenderContext) -> Position {
     coords_at_pos(
         context.doc.text().slice(..),
-        context
-            .doc
-            .selection(context.view.id)
-            .primary()
-            .cursor(context.doc.text().slice(..)),
+        context.doc.selection(context.view.id).primary().cursor(
+            context.doc.text().slice(..),
+            context.doc.config.load().logical_cursor_shape,
+        ),
     )
 }
 

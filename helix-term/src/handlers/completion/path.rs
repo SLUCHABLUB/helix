@@ -25,7 +25,10 @@ pub(crate) fn path_completion(
     }
 
     let text = doc.text().clone();
-    let cursor = selection.primary().cursor(text.slice(..));
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = selection
+        .primary()
+        .cursor(text.slice(..), logical_cursor_shape);
     let cur_line = text.char_to_line(cursor);
     let start = text.line_to_char(cur_line).max(cursor.saturating_sub(1000));
     let line_until_cursor = text.slice(start..cursor);
@@ -105,7 +108,7 @@ pub(crate) fn path_completion(
                 let documentation = path_documentation(&md, &dir_path.join(&file_name), kind);
 
                 let transaction = Transaction::change_by_selection(&text, &selection, |range| {
-                    let cursor = range.cursor(text.slice(..));
+                    let cursor = range.cursor(text.slice(..), logical_cursor_shape);
                     (cursor - edit_diff, cursor, Some((&file_name).into()))
                 });
 

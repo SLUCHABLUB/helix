@@ -1,7 +1,10 @@
 //! When typing the opening character of one of the possible pairs defined below,
 //! this module provides the functionality to insert the paired closing character.
 
-use crate::{graphemes, movement::Direction, Range, Rope, Selection, Tendril, Transaction};
+use crate::{
+    graphemes, movement::Direction, LogicalCursorShape, Range, Rope, Selection, Tendril,
+    Transaction,
+};
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
@@ -35,24 +38,37 @@ impl Pair {
     }
 
     /// true if all of the pair's conditions hold for the given document and range
-    pub fn should_close(&self, doc: &Rope, range: &Range) -> bool {
-        let mut should_close = Self::next_is_not_alpha(doc, range);
+    pub fn should_close(
+        &self,
+        doc: &Rope,
+        range: &Range,
+        logical_cursor_shape: LogicalCursorShape,
+    ) -> bool {
+        let mut should_close = Self::next_is_not_alpha(doc, range, logical_cursor_shape);
 
         if self.same() {
-            should_close &= Self::prev_is_not_alpha(doc, range);
+            should_close &= Self::prev_is_not_alpha(doc, range, logical_cursor_shape);
         }
 
         should_close
     }
 
-    pub fn next_is_not_alpha(doc: &Rope, range: &Range) -> bool {
-        let cursor = range.cursor(doc.slice(..));
+    pub fn next_is_not_alpha(
+        doc: &Rope,
+        range: &Range,
+        logical_cursor_shape: LogicalCursorShape,
+    ) -> bool {
+        let cursor = range.cursor(doc.slice(..), logical_cursor_shape);
         let next_char = doc.get_char(cursor);
         next_char.map(|c| !c.is_alphanumeric()).unwrap_or(true)
     }
 
-    pub fn prev_is_not_alpha(doc: &Rope, range: &Range) -> bool {
-        let cursor = range.cursor(doc.slice(..));
+    pub fn prev_is_not_alpha(
+        doc: &Rope,
+        range: &Range,
+        logical_cursor_shape: LogicalCursorShape,
+    ) -> bool {
+        let cursor = range.cursor(doc.slice(..), logical_cursor_shape);
         let prev_char = prev_char(doc, cursor);
         prev_char.map(|c| !c.is_alphanumeric()).unwrap_or(true)
     }
@@ -120,17 +136,23 @@ impl Default for AutoPairs {
 //   middle of triple quotes, and more exotic pairs like Jinja's {% %}
 
 #[must_use]
-pub fn hook(doc: &Rope, selection: &Selection, ch: char, pairs: &AutoPairs) -> Option<Transaction> {
+pub fn hook(
+    doc: &Rope,
+    selection: &Selection,
+    ch: char,
+    pairs: &AutoPairs,
+    logical_cursor_shape: LogicalCursorShape,
+) -> Option<Transaction> {
     log::trace!("autopairs hook selection: {:#?}", selection);
 
     if let Some(pair) = pairs.get(ch) {
         if pair.same() {
-            return Some(handle_same(doc, selection, pair));
+            return Some(handle_same(doc, selection, pair, logical_cursor_shape));
         } else if pair.open == ch {
-            return Some(handle_open(doc, selection, pair));
+            return Some(handle_open(doc, selection, pair, logical_cursor_shape));
         } else if pair.close == ch {
             // && char_at pos == close
-            return Some(handle_close(doc, selection, pair));
+            return Some(handle_close(doc, selection, pair, logical_cursor_shape));
         }
     }
 
@@ -262,12 +284,17 @@ fn get_next_range(doc: &Rope, start_range: &Range, offset: usize, len_inserted: 
     Range::new(end_anchor, end_head)
 }
 
-fn handle_open(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
+fn handle_open(
+    doc: &Rope,
+    selection: &Selection,
+    pair: &Pair,
+    logical_cursor_shape: LogicalCursorShape,
+) -> Transaction {
     let mut end_ranges = SmallVec::with_capacity(selection.len());
     let mut offs = 0;
 
     let transaction = Transaction::change_by_selection(doc, selection, |start_range| {
-        let cursor = start_range.cursor(doc.slice(..));
+        let cursor = start_range.cursor(doc.slice(..), logical_cursor_shape);
         let next_char = doc.get_char(cursor);
         let len_inserted;
 
@@ -275,7 +302,7 @@ fn handle_open(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
         // inserting exactly one or two chars. When arbitrary length pairs are
         // added, these will need to be changed.
         let change = match next_char {
-            Some(_) if !pair.should_close(doc, start_range) => {
+            Some(_) if !pair.should_close(doc, start_range, logical_cursor_shape) => {
                 len_inserted = 1;
                 let mut tendril = Tendril::new();
                 tendril.push(pair.open);
@@ -301,12 +328,17 @@ fn handle_open(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
     t
 }
 
-fn handle_close(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
+fn handle_close(
+    doc: &Rope,
+    selection: &Selection,
+    pair: &Pair,
+    logical_cursor_shape: LogicalCursorShape,
+) -> Transaction {
     let mut end_ranges = SmallVec::with_capacity(selection.len());
     let mut offs = 0;
 
     let transaction = Transaction::change_by_selection(doc, selection, |start_range| {
-        let cursor = start_range.cursor(doc.slice(..));
+        let cursor = start_range.cursor(doc.slice(..), logical_cursor_shape);
         let next_char = doc.get_char(cursor);
         let mut len_inserted = 0;
 
@@ -333,13 +365,18 @@ fn handle_close(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
 }
 
 /// handle cases where open and close is the same, or in triples ("""docstring""")
-fn handle_same(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
+fn handle_same(
+    doc: &Rope,
+    selection: &Selection,
+    pair: &Pair,
+    logical_cursor_shape: LogicalCursorShape,
+) -> Transaction {
     let mut end_ranges = SmallVec::with_capacity(selection.len());
 
     let mut offs = 0;
 
     let transaction = Transaction::change_by_selection(doc, selection, |start_range| {
-        let cursor = start_range.cursor(doc.slice(..));
+        let cursor = start_range.cursor(doc.slice(..), logical_cursor_shape);
         let mut len_inserted = 0;
         let next_char = doc.get_char(cursor);
 
@@ -352,7 +389,7 @@ fn handle_same(doc: &Rope, selection: &Selection, pair: &Pair) -> Transaction {
 
             // for equal pairs, don't insert both open and close if either
             // side has a non-pair char
-            if pair.should_close(doc, start_range) {
+            if pair.should_close(doc, start_range, logical_cursor_shape) {
                 pair_str.push(pair.close);
             }
 

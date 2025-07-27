@@ -35,8 +35,9 @@ pub(super) fn completion(
     let rope = doc.text().clone();
     let word_index = editor.handlers.word_index().clone();
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
     let selection = doc.selection(view.id).clone();
-    let pos = selection.primary().cursor(text);
+    let pos = selection.primary().cursor(text, logical_cursor_shape);
 
     let cursor = movement::move_prev_word_start(text, core::Range::point(pos), 1);
     if cursor.head == pos {
@@ -78,7 +79,7 @@ pub(super) fn completion(
             .filter(|word| word.as_str() != typed_word.as_ref())
             .map(|word| {
                 let transaction = Transaction::change_by_selection(&rope, &selection, |range| {
-                    let cursor = range.cursor(text);
+                    let cursor = range.cursor(text, logical_cursor_shape);
                     (cursor - edit_diff, cursor, Some((&word).into()))
                 });
                 CompletionItem::Other(core::CompletionItem {
@@ -116,7 +117,11 @@ pub(super) fn retain_valid_completions(
     }
 
     let text = doc.text().slice(..);
-    let cursor = doc.selection(view_id).primary().cursor(text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let cursor = doc
+        .selection(view_id)
+        .primary()
+        .cursor(text, logical_cursor_shape);
     if text
         .get_char(cursor.saturating_sub(1))
         .is_some_and(|ch| ch.is_whitespace())

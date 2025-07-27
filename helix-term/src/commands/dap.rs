@@ -80,8 +80,12 @@ fn thread_picker(
 fn get_breakpoint_at_current_line(editor: &mut Editor) -> Option<(usize, Breakpoint)> {
     let (view, doc) = current!(editor);
     let text = doc.text().slice(..);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
-    let line = doc.selection(view.id).primary().cursor_line(text);
+    let line = doc
+        .selection(view.id)
+        .primary()
+        .cursor_line(text, logical_cursor_shape);
     let path = doc.path()?;
     editor.breakpoints.get(path).and_then(|breakpoints| {
         let i = breakpoints.iter().position(|b| b.line == line);
@@ -385,7 +389,11 @@ pub fn dap_toggle_breakpoint(cx: &mut Context) {
         }
     };
     let text = doc.text().slice(..);
-    let line = doc.selection(view.id).primary().cursor_line(text);
+    let logical_cursor_shape = doc.config.load().logical_cursor_shape;
+    let line = doc
+        .selection(view.id)
+        .primary()
+        .cursor_line(text, logical_cursor_shape);
     dap_toggle_breakpoint_impl(cx, path, line);
 }
 

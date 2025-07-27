@@ -653,6 +653,7 @@ impl Component for Prompt {
             ctrl!('s') => {
                 let (view, doc) = current!(cx.editor);
                 let text = doc.text().slice(..);
+                let logical_cursor_shape = doc.config.load().logical_cursor_shape;
 
                 use helix_core::textobject;
                 let range = textobject::textobject_word(
@@ -661,6 +662,7 @@ impl Component for Prompt {
                     textobject::TextObject::Inside,
                     1,
                     false,
+                    logical_cursor_shape,
                 );
                 let line = text.slice(range.from()..range.to()).to_string();
                 if !line.is_empty() {

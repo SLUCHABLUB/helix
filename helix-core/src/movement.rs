@@ -16,7 +16,7 @@ use crate::{
     text_annotations::TextAnnotations,
     textobject::TextObject,
     tree_sitter::Node,
-    visual_offset_from_block, Range, RopeSlice, Selection, Syntax,
+    visual_offset_from_block, LogicalCursorShape, Range, RopeSlice, Selection, Syntax,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -39,8 +39,9 @@ pub fn move_horizontally(
     behaviour: Movement,
     _: &TextFormat,
     _: &mut TextAnnotations,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    let pos = range.cursor(slice);
+    let pos = range.cursor(slice, logical_cursor_shape);
 
     // Compute the new position.
     let new_pos = match dir {
@@ -49,7 +50,12 @@ pub fn move_horizontally(
     };
 
     // Compute the final new range.
-    range.put_cursor(slice, new_pos, behaviour == Movement::Extend)
+    range.put_cursor(
+        slice,
+        new_pos,
+        behaviour == Movement::Extend,
+        logical_cursor_shape,
+    )
 }
 
 pub fn move_vertically_visual(
@@ -60,12 +66,22 @@ pub fn move_vertically_visual(
     behaviour: Movement,
     text_fmt: &TextFormat,
     annotations: &mut TextAnnotations,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
     if !text_fmt.soft_wrap {
-        return move_vertically(slice, range, dir, count, behaviour, text_fmt, annotations);
+        return move_vertically(
+            slice,
+            range,
+            dir,
+            count,
+            behaviour,
+            text_fmt,
+            annotations,
+            logical_cursor_shape,
+        );
     }
     annotations.clear_line_annotations();
-    let pos = range.cursor(slice);
+    let pos = range.cursor(slice, logical_cursor_shape);
 
     // Compute the current position's 2d coordinates.
     let (visual_pos, block_off) = visual_offset_from_block(slice, pos, pos, text_fmt, annotations);
@@ -98,7 +114,12 @@ pub fn move_vertically_visual(
         return range;
     }
 
-    let mut new_range = range.put_cursor(slice, new_pos, behaviour == Movement::Extend);
+    let mut new_range = range.put_cursor(
+        slice,
+        new_pos,
+        behaviour == Movement::Extend,
+        logical_cursor_shape,
+    );
     new_range.old_visual_position = Some((0, new_col));
     new_range
 }
@@ -111,9 +132,10 @@ pub fn move_vertically(
     behaviour: Movement,
     text_fmt: &TextFormat,
     annotations: &mut TextAnnotations,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
     annotations.clear_line_annotations();
-    let pos = range.cursor(slice);
+    let pos = range.cursor(slice, logical_cursor_shape);
     let line_idx = slice.char_to_line(pos);
     let line_start = slice.line_to_char(line_idx);
 
@@ -160,7 +182,12 @@ pub fn move_vertically(
         return range;
     }
 
-    let mut new_range = range.put_cursor(slice, new_pos, behaviour == Movement::Extend);
+    let mut new_range = range.put_cursor(
+        slice,
+        new_pos,
+        behaviour == Movement::Extend,
+        logical_cursor_shape,
+    );
     new_range.old_visual_position = Some((new_row, new_col));
     new_range
 }
@@ -266,9 +293,10 @@ pub fn move_prev_paragraph(
     range: Range,
     count: usize,
     behavior: Movement,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    let mut line = range.cursor_line(slice);
-    let first_char = slice.line_to_char(line) == range.cursor(slice);
+    let mut line = range.cursor_line(slice, logical_cursor_shape);
+    let first_char = slice.line_to_char(line) == range.cursor(slice, logical_cursor_shape);
     let prev_line_empty = rope_is_line_ending(slice.line(line.saturating_sub(1)));
     let curr_line_empty = rope_is_line_ending(slice.line(line));
     let prev_empty_to_line = prev_line_empty && !curr_line_empty;
@@ -298,12 +326,14 @@ pub fn move_prev_paragraph(
     let anchor = if behavior == Movement::Move {
         // exclude first character after paragraph boundary
         if prev_empty_to_line && first_char {
-            range.cursor(slice)
+            range.cursor(slice, logical_cursor_shape)
         } else {
             range.head
         }
     } else {
-        range.put_cursor(slice, head, true).anchor
+        range
+            .put_cursor(slice, head, true, logical_cursor_shape)
+            .anchor
     };
     Range::new(anchor, head)
 }
@@ -313,10 +343,11 @@ pub fn move_next_paragraph(
     range: Range,
     count: usize,
     behavior: Movement,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
-    let mut line = range.cursor_line(slice);
-    let last_char =
-        prev_grapheme_boundary(slice, slice.line_to_char(line + 1)) == range.cursor(slice);
+    let mut line = range.cursor_line(slice, logical_cursor_shape);
+    let last_char = prev_grapheme_boundary(slice, slice.line_to_char(line + 1))
+        == range.cursor(slice, logical_cursor_shape);
     let curr_line_empty = rope_is_line_ending(slice.line(line));
     let next_line_empty =
         rope_is_line_ending(slice.line(slice.len_lines().saturating_sub(1).min(line + 1)));
@@ -345,10 +376,12 @@ pub fn move_next_paragraph(
         if curr_empty_to_line && last_char {
             range.head
         } else {
-            range.cursor(slice)
+            range.cursor(slice, logical_cursor_shape)
         }
     } else {
-        range.put_cursor(slice, head, true).anchor
+        range
+            .put_cursor(slice, head, true, logical_cursor_shape)
+            .anchor
     };
     Range::new(anchor, head)
 }
@@ -570,10 +603,11 @@ pub fn goto_treesitter_object(
     syntax: &Syntax,
     loader: &syntax::Loader,
     count: usize,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Range {
     let textobject_query = loader.textobject_query(syntax.root_language());
     let get_range = move |range: Range| -> Option<Range> {
-        let byte_pos = slice.char_to_byte(range.cursor(slice));
+        let byte_pos = slice.char_to_byte(range.cursor(slice, logical_cursor_shape));
 
         let cap_name = |t: TextObject| format!("{}.{}", object_name, t);
         let nodes = textobject_query?.capture_nodes_any(
@@ -635,6 +669,7 @@ pub fn move_parent_node_end(
     selection: Selection,
     dir: Direction,
     movement: Movement,
+    logical_cursor_shape: LogicalCursorShape,
 ) -> Selection {
     selection.transform(|range| {
         let start_from = text.char_to_byte(range.from()) as u32;
@@ -665,7 +700,7 @@ pub fn move_parent_node_end(
                 let end_head = text.byte_to_char(node.start_byte() as usize);
 
                 // if we're already on the beginning, look up to the parent
-                if end_head == range.cursor(text) {
+                if end_head == range.cursor(text, logical_cursor_shape) {
                     node = find_parent_start(&node).unwrap_or(node);
                     text.byte_to_char(node.start_byte() as usize)
                 } else {
@@ -733,6 +768,7 @@ mod test {
                     Movement::Move,
                     &TextFormat::default(),
                     &mut TextAnnotations::default(),
+                    LogicalCursorShape::Block,
                 )
                 .head
             ),
@@ -766,6 +802,7 @@ mod test {
                 Movement::Move,
                 &TextFormat::default(),
                 &mut TextAnnotations::default(),
+                LogicalCursorShape::Block,
             );
             assert_eq!(coords_at_pos(slice, range.head), coordinates.into())
         }
@@ -800,6 +837,7 @@ mod test {
                 Movement::Move,
                 &TextFormat::default(),
                 &mut TextAnnotations::default(),
+                LogicalCursorShape::Block,
             );
             assert_eq!(coords_at_pos(slice, range.head), coordinates.into());
             assert_eq!(range.head, range.anchor);
@@ -830,6 +868,7 @@ mod test {
                 Movement::Extend,
                 &TextFormat::default(),
                 &mut TextAnnotations::default(),
+                LogicalCursorShape::Block,
             );
             assert_eq!(range.anchor, original_anchor);
         }
@@ -862,6 +901,7 @@ mod test {
                 Movement::Move,
                 &TextFormat::default(),
                 &mut TextAnnotations::default(),
+                LogicalCursorShape::Block,
             );
             assert_eq!(coords_at_pos(slice, range.head), coordinates.into());
             assert_eq!(range.head, range.anchor);
@@ -904,6 +944,7 @@ mod test {
                     Movement::Move,
                     &TextFormat::default(),
                     &mut TextAnnotations::default(),
+                    LogicalCursorShape::Block,
                 ),
                 Axis::V => move_vertically_visual(
                     slice,
@@ -913,6 +954,7 @@ mod test {
                     Movement::Move,
                     &TextFormat::default(),
                     &mut TextAnnotations::default(),
+                    LogicalCursorShape::Block,
                 ),
             };
             assert_eq!(coords_at_pos(slice, range.head), coordinates.into());
@@ -955,6 +997,7 @@ mod test {
                     Movement::Move,
                     &TextFormat::default(),
                     &mut TextAnnotations::default(),
+                    LogicalCursorShape::Block,
                 ),
                 Axis::V => move_vertically_visual(
                     slice,
@@ -964,6 +1007,7 @@ mod test {
                     Movement::Move,
                     &TextFormat::default(),
                     &mut TextAnnotations::default(),
+                    LogicalCursorShape::Block,
                 ),
             };
             assert_eq!(coords_at_pos(slice, range.head), coordinates.into());
@@ -2054,8 +2098,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection =
-                selection.transform(|r| move_prev_paragraph(text.slice(..), r, 1, Movement::Move));
+            let selection = selection.transform(|r| {
+                move_prev_paragraph(
+                    text.slice(..),
+                    r,
+                    1,
+                    Movement::Move,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -2077,8 +2128,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection =
-                selection.transform(|r| move_prev_paragraph(text.slice(..), r, 2, Movement::Move));
+            let selection = selection.transform(|r| {
+                move_prev_paragraph(
+                    text.slice(..),
+                    r,
+                    2,
+                    Movement::Move,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -2100,8 +2158,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection = selection
-                .transform(|r| move_prev_paragraph(text.slice(..), r, 1, Movement::Extend));
+            let selection = selection.transform(|r| {
+                move_prev_paragraph(
+                    text.slice(..),
+                    r,
+                    1,
+                    Movement::Extend,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -2142,8 +2207,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection =
-                selection.transform(|r| move_next_paragraph(text.slice(..), r, 1, Movement::Move));
+            let selection = selection.transform(|r| {
+                move_next_paragraph(
+                    text.slice(..),
+                    r,
+                    1,
+                    Movement::Move,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -2165,8 +2237,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection =
-                selection.transform(|r| move_next_paragraph(text.slice(..), r, 2, Movement::Move));
+            let selection = selection.transform(|r| {
+                move_next_paragraph(
+                    text.slice(..),
+                    r,
+                    2,
+                    Movement::Move,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
@@ -2188,8 +2267,15 @@ mod test {
         for (before, expected) in tests {
             let (s, selection) = crate::test::print(before);
             let text = Rope::from(s.as_str());
-            let selection = selection
-                .transform(|r| move_next_paragraph(text.slice(..), r, 1, Movement::Extend));
+            let selection = selection.transform(|r| {
+                move_next_paragraph(
+                    text.slice(..),
+                    r,
+                    1,
+                    Movement::Extend,
+                    LogicalCursorShape::Block,
+                )
+            });
             let actual = crate::test::plain(s.as_ref(), &selection);
             assert_eq!(actual, expected, "\nbefore: `{:?}`", before);
         }
